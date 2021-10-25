@@ -100,6 +100,11 @@ def delete_imags():
         repo_name = str(request.form['image_name'])
         image_name = f'{username}/{repo_name}'
         client = docker.from_env()
+        for container in client.containers.list(all=True):
+            if str(container.image.attrs['RepoTags'][0]).split(":")[0] == image_name:
+                return{
+                    'success': False,
+                    'message': '镜像正在被容器使用'}
         client.images.remove(image_name)
         return{
             'success': True,
@@ -218,6 +223,31 @@ def start_container():
         return{
             'success': True,
             'message': '启动成功'}
+    return{
+        'success': False,
+        'data': "token无效"}
+
+
+@app.route("/containers/log", methods=['POST'])
+def container_log():
+    if 'token' in request.headers:
+        id = verify_token(request.headers.get('token'))
+        if id == None:
+            return{
+                'success': False,
+                'data': "token无效"}
+        username = get_username(id)
+        container_name = f'{username}-{request.form["container_name"]}'
+        client = docker.from_env()
+        data = {}
+        for container in client.containers.list(all=True):
+            if container.name == container_name:
+                data = {
+                    "log": container.logs().decode('utf-8')
+                }
+        return{
+            'success': True,
+            'data': data}
     return{
         'success': False,
         'data': "token无效"}
