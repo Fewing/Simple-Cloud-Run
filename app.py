@@ -1,7 +1,7 @@
-from os import name
 from flask import Flask
 from flask import request
-from itsdangerous import TimedJSONWebSignatureSerializer as Serializer
+from flask_cors import CORS
+from util import create_token, verify_token, get_username
 
 import docker
 import sqlite3
@@ -10,23 +10,7 @@ import time
 
 
 app = Flask(__name__)
-SECRET_KEY = '\xc9ixnRb\xe40\xc4\xa5\x7f\x04\xd0y6\x02\x1f\x96\xeao+\x8a\x9f\xe4'
-
-
-def create_token(user_id):
-    s = Serializer(SECRET_KEY,
-                   expires_in=7200)
-    token = s.dumps({"id": user_id}).decode('ascii')
-    return token
-
-
-def verify_token(token):
-    s = Serializer(SECRET_KEY)
-    try:
-        data = s.loads(token)
-    except Exception:
-        return None
-    return data["id"]
+CORS(app, supports_credentials=True)
 
 
 @app.route("/")
@@ -85,43 +69,71 @@ def login():
 def user_imags():
     if request.headers.has_key('token'):
         id = verify_token(request.headers.get('token'))
-
-
-@app.route("/containers", methods=['GET'])
-def user_containers():
-    if request.headers.has_key('token'):
-        id = verify_token(request.headers.get('token'))
-
-
-@app.route("/deploy", methods=["POST"])
-def deploy():
-    if 'token' in request.headers:
-        id = verify_token(request.headers.get('token'))
-        repo_name = request.form['repo_name']
-        repo_url = request.form['repo_url']
-        port = int(request.form['port'])
-        if port < 5000 and port > 65535:
+        if id == None:
             return{
                 'success': False,
-                'message': '端口范围错误'}
-        conn = sqlite3.connect('sqlite.db')
-        cursor = conn.cursor()
-        cursor.execute(
-            'select * from USER where ID=?', (str(id)))
-        values = cursor.fetchall()
-        username = values[0][1]
-        cursor.close()
-        conn.close()
+                'data': "token无效"}
+        username = get_username(id)
+        client = docker.from_env()
+        data = []
+        for image in client.images.list():
+            name = str(image.attrs['RepoTags'][0])
+            if (name.split('/')[0] == username):
+                data.append(name.split('/')[1].split(':')[0])
+        return{
+            'success': True,
+            'data': data}
+    return{
+        'success': False,
+        'data': "token无效"}
+
+
+@app.route("/images/delete", methods=['POST'])
+def delete_imags():
+    if request.headers.has_key('token'):
+        id = verify_token(request.headers.get('token'))
+        if id == None:
+            return{
+                'success': False,
+                'data': "token无效"}
+        username = get_username(id)
+        repo_name = str(request.form['image_name'])
+        image_name = f'{username}/{repo_name}'
+        client = docker.from_env()
+        client.images.remove(image_name)
+        return{
+            'success': True,
+            'message': '删除成功'}
+    return{
+        'success': False,
+        'data': "token无效"}
+
+
+@app.route("/build-image", methods=['POST'])
+def build_image():
+    if 'token' in request.headers:
+        id = verify_token(request.headers.get('token'))
+        if id == None:
+            return{
+                'success': False,
+                'data': "token无效"}
+        repo_name = request.form['image_name']
+        if(not repo_name.isalnum()):
+            return{
+                'success': False,
+                'message': '镜像名仅能包含数字或字母'}
+        repo_url = request.form['repo_url']
+        username = get_username(id)
         git_path = f'temp/{username}/{repo_name}-{str(int(time.time()))}'
         repo = git.Repo.clone_from(
             url=repo_url, to_path=git_path)
 
         client = docker.from_env()
         image_name = f'{username}/{repo_name}'
-        if len(client.images.list(name = image_name)) > 0:
+        if len(client.images.list(name=image_name)) > 0:
             return{
                 'success': False,
-                'message': '项目已存在'}
+                'message': '镜像名已存在'}
         image, logs = client.images.build(
             path=git_path, tag=image_name, rm=True)
         output = ''
@@ -129,13 +141,151 @@ def deploy():
             if 'stream' in log:
                 output += log['stream']
 
-        container = client.containers.run(image_name, ports={'80/tcp': port},
-                                          name=f'{username}-{repo_name}-{str(int(time.time()))}',
-                                          detach=True, environment=["PORT=80"])
         client.close()
         return{
             'success': True,
-            'output': output}
+            'data': output}
+    else:
+        return{
+            'success': False,
+            'data': "token无效"}
+
+
+@app.route("/containers", methods=['GET'])
+def user_containers():
+    if request.headers.has_key('token'):
+        id = verify_token(request.headers.get('token'))
+        if id == None:
+            return{
+                'success': False,
+                'data': "token无效"}
+        username = get_username(id)
+        client = docker.from_env()
+        data = []
+        for container in client.containers.list(all=True):
+            name = str(container.name)
+            if name.split('-')[0] == username:
+                data.append({
+                    'name': name.split('-')[1],
+                    'status': container.status,
+                    'port': list(container.ports.keys())[0].split('/')[0],
+                    'image': str(container.image.attrs['RepoTags'][0].split('/')[1].split(':')[0])
+                })
+        return{
+            'success': True,
+            'data': data}
+    return{
+        'success': False,
+        'data': "token无效"}
+
+
+@app.route("/containers/stop", methods=['POST'])
+def pause_container():
+    if 'token' in request.headers:
+        id = verify_token(request.headers.get('token'))
+        if id == None:
+            return{
+                'success': False,
+                'data': "token无效"}
+        username = get_username(id)
+        container_name = f'{username}-{request.form["container_name"]}'
+        client = docker.from_env()
+        for container in client.containers.list(all=True):
+            if container.name == container_name:
+                container.pause()
+        return{
+            'success': True,
+            'message': '停止成功'}
+    return{
+        'success': False,
+        'data': "token无效"}
+
+
+@app.route("/containers/start", methods=['POST'])
+def start_container():
+    if 'token' in request.headers:
+        id = verify_token(request.headers.get('token'))
+        if id == None:
+            return{
+                'success': False,
+                'data': "token无效"}
+        username = get_username(id)
+        container_name = f'{username}-{request.form["container_name"]}'
+        client = docker.from_env()
+        for container in client.containers.list(all=True):
+            if container.name == container_name:
+                container.unpause()
+        return{
+            'success': True,
+            'message': '启动成功'}
+    return{
+        'success': False,
+        'data': "token无效"}
+
+
+@app.route("/containers/delete", methods=['POST'])
+def delete_container():
+    if 'token' in request.headers:
+        id = verify_token(request.headers.get('token'))
+        if id == None:
+            return{
+                'success': False,
+                'data': "token无效"}
+        username = get_username(id)
+        container_name = f'{username}-{request.form["container_name"]}'
+        client = docker.from_env()
+        for container in client.containers.list(all=True):
+            if container.name == container_name:
+                container.stop()
+                container.remove()
+        return{
+            'success': True,
+            'message': '删除成功'}
+    return{
+        'success': False,
+        'data': "token无效"}
+
+
+@app.route("/run-image", methods=['POST'])
+def run_image():
+    if 'token' in request.headers:
+        id = verify_token(request.headers.get('token'))
+        if id == None:
+            return{
+                'success': False,
+                'data': "token无效"}
+        container_name = str(request.form['container_name'])
+        if(not container_name.isalnum()):
+            return{
+                'success': False,
+                'message': '容器名仅能包含数字或字母'}
+        repo_name = str(request.form['image_name'])
+        port = int(request.form['port'])
+        if port < 5000 and port > 65535:
+            return{
+                'success': False,
+                'message': '端口范围错误'}
+        if(not container_name.isalnum()):
+            return{
+                'success': False,
+                'message': '容器名仅能包含数字或字母'}
+        username = get_username(id)
+        client = docker.from_env()
+        image_name = f'{username}/{repo_name}'
+        if len(client.images.list(name=image_name)) > 0:
+            container = client.containers.run(image_name, ports={'80/tcp': port},
+                                              name=f'{username}-{container_name}',
+                                              detach=True, environment=["PORT=80"])
+            return{
+                'success': True,
+                'message': '容器运行成功'}
+        else:
+            return{
+                'success': False,
+                'message': '镜像不存在'}
+    return{
+        'success': False,
+        'data': "token无效"}
 
 
 if __name__ == "__main__":
