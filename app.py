@@ -67,7 +67,7 @@ def login():
 
 @app.route("/images", methods=['GET'])
 def user_imags():
-    if request.headers.has_key('token'):
+    if 'token' in request.headers:
         id = verify_token(request.headers.get('token'))
         if id == None:
             return{
@@ -79,7 +79,19 @@ def user_imags():
         for image in client.images.list():
             name = str(image.attrs['RepoTags'][0])
             if (name.split('/')[0] == username):
-                data.append(name.split('/')[1].split(':')[0])
+                containers = []
+                for container in client.containers.list(all=True):
+                    if str(container.image.attrs['RepoTags'][0]) == name:
+                        containers.append(container.name.split('-')[1])
+                data.append({
+                    'name': name.split('/')[1].split(':')[0],
+                    'url': image.labels['url'],
+                    'history': image.history(),
+                    'created': str(image.attrs['Created']),
+                    'size': str(image.attrs['Size']),
+                    'architecture': str(image.attrs['Architecture']),
+                    'containers': containers,
+                })
         return{
             'success': True,
             'data': data}
@@ -90,7 +102,7 @@ def user_imags():
 
 @app.route("/images/delete", methods=['POST'])
 def delete_imags():
-    if request.headers.has_key('token'):
+    if 'token' in request.headers:
         id = verify_token(request.headers.get('token'))
         if id == None:
             return{
@@ -140,7 +152,7 @@ def build_image():
                 'success': False,
                 'message': '镜像名已存在'}
         image, logs = client.images.build(
-            path=git_path, tag=image_name, rm=True)
+            path=git_path, tag=image_name, labels={'url': repo_url}, rm=True)
         output = ''
         for log in logs:
             if 'stream' in log:
@@ -158,7 +170,7 @@ def build_image():
 
 @app.route("/containers", methods=['GET'])
 def user_containers():
-    if request.headers.has_key('token'):
+    if 'token' in request.headers:
         id = verify_token(request.headers.get('token'))
         if id == None:
             return{
@@ -173,7 +185,8 @@ def user_containers():
                 data.append({
                     'name': name.split('-')[1],
                     'status': container.status,
-                    'port': list(container.ports.keys())[0].split('/')[0],
+                    'port': container.ports['80/tcp'][0]['HostPort'],
+                    'created': container.attrs['Created'],
                     'image': str(container.image.attrs['RepoTags'][0].split('/')[1].split(':')[0])
                 })
         return{
@@ -319,4 +332,4 @@ def run_image():
 
 
 if __name__ == "__main__":
-    app.run(host="::", port=5000)
+    app.run(host="::", port=4999)
