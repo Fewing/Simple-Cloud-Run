@@ -22,9 +22,9 @@ def hello_world():
 def register():
     username = request.form['username']
     if(not username.isalnum()):
-            return{
-                'success': False,
-                'message': '用户名仅能包含数字或字母'}
+        return{
+            'success': False,
+            'message': '用户名仅能包含数字或字母'}
     username = username.lower()
     password = request.form['password']
     conn = sqlite3.connect('sqlite.db')
@@ -126,6 +126,30 @@ def delete_imags():
         return{
             'success': True,
             'message': '删除成功'}
+    return{
+        'success': False,
+        'data': "token无效"}
+
+
+@app.route("/images/rename", methods=['POST'])
+def rename_imags():
+    if 'token' in request.headers:
+        id = verify_token(request.headers.get('token'))
+        if id == None:
+            return{
+                'success': False,
+                'data': "token无效"}
+        username = get_username(id)
+        repo_name = str(request.form['image_name'])
+        new_repo_name = str(request.form['new_image_name'])
+        image_name = f'{username}/{repo_name}'
+        client = docker.from_env()
+        image = client.images.get(image_name)
+        image.tag(f'{username}/{new_repo_name}')
+        client.images.remove(image_name)
+        return{
+            'success': True,
+            'message': '重命名镜像成功'}
     return{
         'success': False,
         'data': "token无效"}
