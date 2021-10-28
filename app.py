@@ -21,6 +21,11 @@ def hello_world():
 @app.route("/register", methods=['POST'])
 def register():
     username = request.form['username']
+    if(not username.isalnum()):
+            return{
+                'success': False,
+                'message': '用户名仅能包含数字或字母'}
+    username = username.lower()
     password = request.form['password']
     conn = sqlite3.connect('sqlite.db')
     cursor = conn.cursor()
@@ -139,6 +144,7 @@ def build_image():
             return{
                 'success': False,
                 'message': '镜像名仅能包含数字或字母'}
+        repo_name = repo_name.lower()
         repo_url = request.form['repo_url']
         username = get_username(id)
         git_path = f'temp/{username}/{repo_name}-{str(int(time.time()))}'
@@ -261,6 +267,34 @@ def container_log():
         return{
             'success': True,
             'data': data}
+    return{
+        'success': False,
+        'data': "token无效"}
+
+
+@app.route("/containers/modify", methods=['POST'])
+def modify_container():
+    if 'token' in request.headers:
+        id = verify_token(request.headers.get('token'))
+        if id == None:
+            return{
+                'success': False,
+                'data': "token无效"}
+        username = get_username(id)
+        container_name = f'{username}-{request.form["container_name"]}'
+        new_container_name = request.form["new_container_name"]
+        port = request.form['port']
+        client = docker.from_env()
+        for container in client.containers.list(all=True):
+            if container.name == container_name:
+                container.stop()
+                container.remove()
+                container = client.containers.run(container.image.attrs['RepoTags'][0].split(':')[0], ports={'80/tcp': port},
+                                                  name=f'{username}-{new_container_name}',
+                                                  detach=True, environment=["PORT=80"])
+        return{
+            'success': True,
+            'message': "修改成功"}
     return{
         'success': False,
         'data': "token无效"}
