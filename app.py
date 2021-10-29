@@ -82,6 +82,8 @@ def user_imags():
         client = docker.from_env()
         data = []
         for image in client.images.list():
+            if len(image.attrs['RepoTags']) == 0:
+                continue
             name = str(image.attrs['RepoTags'][0])
             if (name.split('/')[0] == username):
                 containers = []
@@ -176,13 +178,19 @@ def build_image():
             url=repo_url, to_path=git_path)
 
         client = docker.from_env()
+        client.images.prune(filters={
+            'dangling': True
+        })
         image_name = f'{username}/{repo_name}'
         if len(client.images.list(name=image_name)) > 0:
             return{
                 'success': False,
                 'message': '镜像名已存在'}
         image, logs = client.images.build(
-            path=git_path, tag=image_name, labels={'url': repo_url}, rm=True)
+            path=git_path, tag=image_name, labels={'url': repo_url}, rm=True, forcerm=True)
+        client.images.prune(filters={
+            'dangling': True
+        })
         output = ''
         for log in logs:
             if 'stream' in log:
