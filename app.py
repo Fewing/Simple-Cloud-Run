@@ -3,14 +3,54 @@ from flask import request
 from flask_cors import CORS
 from util import create_token, verify_token, get_username
 
+import kubernetes
 import docker
 import sqlite3
 import git
 import time
+import json
 
 
 app = Flask(__name__)
 CORS(app, supports_credentials=True)
+
+
+def update_app(user_id, container_name, new_container_name):
+    conn = sqlite3.connect('sqlite.db')
+    cursor = conn.cursor()
+    cursor.execute('select id, containers from APP where user_id=?', (user_id,))
+    values = cursor.fetchall()
+    if len(values) != 0:
+        for value in values:
+            id = value[0]
+            containers = json.loads(value[1])
+            if container_name in containers:
+                containers[containers.index(container_name)] = new_container_name
+            cursor.execute(
+                "update APP set containers = ? where id = ?", (json.dumps(containers), id)
+            )
+        cursor.close()
+        conn.commit()
+        conn.close()
+
+
+def judge_app(user_id, container_name):
+    flag = True
+    conn = sqlite3.connect('sqlite.db')
+    cursor = conn.cursor()
+    cursor.execute('select containers from APP where user_id=?', (user_id,))
+    values = cursor.fetchall()
+    if len(values) != 0:
+        for value in values:
+            containers = json.loads(value[0])
+            if container_name in containers:
+                flag = False
+                break
+    cursor.close()
+    conn.commit()
+    conn.close()    
+    return flag
+
 
 
 @app.route("/")
@@ -313,7 +353,8 @@ def modify_container():
                 'success': False,
                 'data': "token无效"}
         username = get_username(id)
-        container_name = f'{username}-{request.form["container_name"]}'
+        old_container_name = request.form["container_name"]
+        container_name = f'{username}-{old_container_name}'
         new_container_name = request.form["new_container_name"]
         port = request.form['port']
         client = docker.from_env()
@@ -324,6 +365,7 @@ def modify_container():
                 container = client.containers.run(container.image.attrs['RepoTags'][0].split(':')[0], ports={'80/tcp': port},
                                                   name=f'{username}-{new_container_name}',
                                                   detach=True, environment=["PORT=80"])
+        update_app(id, old_container_name, new_container_name)
         return{
             'success': True,
             'message': "修改成功"}
@@ -341,7 +383,13 @@ def delete_container():
                 'success': False,
                 'data': "token无效"}
         username = get_username(id)
-        container_name = f'{username}-{request.form["container_name"]}'
+        container_name = request.form["container_name"]
+        if judge_app(id, container_name) is False:
+            return{
+                'success': False,
+                'message': '该容器存在于编排中，无法删除'
+            }
+        container_name = f'{username}-{container_name}'
         client = docker.from_env()
         for container in client.containers.list(all=True):
             if container.name == container_name:
@@ -397,5 +445,128 @@ def run_image():
         'data': "token无效"}
 
 
+@app.route("/app/create", methods=['POST'])
+def create_app():
+    if 'token' in request.headers:
+        id = verify_token(request.headers.get('token'))
+        if id is None:
+            return{
+                'success': False,
+                'data': "token无效"
+            }
+        containers_json = request.form.get('containers')
+        containers = json.loads(containers_json)
+        app_name = request.form['app_name']
+        # sql
+        conn = sqlite3.connect('sqlite.db')
+        cursor = conn.cursor()
+        cursor.execute(
+            "select * from APP where user_id = ? and app_name = ?", (id, app_name)
+        )
+        values = cursor.fetchall()
+        if len(values) > 0:
+            cursor.close()
+            conn.commit()
+            conn.close()
+            return {
+                'success': False,
+                'message': "编排名称重复"
+            }
+        cursor.execute(
+            "INSERT INTO APP (ID,user_id, app_name, containers) VALUES (NULL,?,?,?)", (id, app_name, containers_json)
+        )
+        cursor.close()
+        conn.commit()
+        conn.close()
+        return{
+            'success': True,
+            'message': '编排创建成功'
+        }
+    return {
+        'success': False,
+        'data': "token无效"
+    }
+
+
+@app.route("/app/list", methods=['GET'])
+def list_app():
+    if 'token' in request.headers:
+        id = verify_token(request.headers.get('token'))
+        if id is None:
+            return{
+                'success': False,
+                'data': "token无效"
+            }
+        # sql
+        conn = sqlite3.connect('sqlite.db')
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT app_name, containers FROM APP WHERE user_id = ?", (id,)
+        )
+        values = cursor.fetchall()
+        if len(values) <= 0:
+            return {
+            'success': True,
+            'data': []
+        }
+        ret_data = []
+        for value in values:
+            ret_data.append({
+                'app_name': value[0],
+                'containers': json.loads(value[1])
+            })
+        app_name = values[0][0]
+        containers_json = values[0][1]
+        cursor.close()
+        conn.commit()
+        conn.close()
+        return{
+            'success': True,
+            'data': ret_data
+        }
+    return {
+        'success': False,
+        'data': "token无效"
+    }
+
+
+@app.route("/app/delete", methods=['POST'])
+def delete_app():
+    if 'token' in request.headers:
+        id = verify_token(request.headers.get('token'))
+        if id is None:
+            return{
+                'success': False,
+                'data': "token无效"
+            }
+        app_name = request.form.get('app_name')
+        # sql
+        conn = sqlite3.connect('sqlite.db')
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT * FROM APP WHERE user_id = ? and app_name = ?", (id, app_name)
+        )
+        values = cursor.fetchall()
+        if len(values) <= 0:
+            return {
+                'success': False,
+                'message': '编排不存在'
+            }
+        cursor.execute(
+            "delete from APP WHERE user_id = ? and app_name = ?", (id, app_name)
+        )
+        cursor.close()
+        conn.commit()
+        conn.close()
+        return {
+            'success': True,
+            'message': '编排删除成功'
+        }
+    return {
+        'success': False,
+        'data': "token无效"
+    }
+
+
 if __name__ == "__main__":
-    app.run(host="::", port=4999)
+    app.run(host="::", port=3306)
