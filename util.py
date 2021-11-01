@@ -24,7 +24,7 @@ def verify_token(token):
 def get_username(id):
     # todo
     conn = sqlite3.connect(
-        '/Users/zhk/大学/大四上/大数据与云计算/云计算paas平台/Simple-Cloud-Run/sqlite.db')
+        '/home/yangzheyu/buaa_paas/Simple-Cloud-Run/sqlite.db')
     cursor = conn.cursor()
     cursor.execute(
         'select * from USER where ID=?', (str(id)))

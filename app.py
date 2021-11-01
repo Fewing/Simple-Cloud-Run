@@ -569,4 +569,4 @@ def delete_app():
 
 
 if __name__ == "__main__":
-    app.run(host="::", port=3306)
+    app.run(host="::", port=4999)
